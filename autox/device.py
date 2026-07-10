@@ -51,12 +51,6 @@ _ORIENTATIONS = {"natural": 0, "n": 0, "left": 1, "l": 1, "upsidedown": 2, "u": 
 # and falls back to a ~5s `dumpsys activity top`, so resolve it directly (~45ms).
 _FOCUS_RE = re.compile(r"mCurrentFocus=Window\{[^}]*\s(?P<pkg>[^\s/]+)/(?P<act>[^\s}]+)\}")
 
-# Clipboard: driven through the clipper app (github.com/majido/clipper), the
-# same tool u2 uses — neither adb nor autox's a11y server has a text-clipboard API.
-CLIPPER_PACKAGE = "ca.zgrs.clipper"
-CLIPPER_SERVICE = f"{CLIPPER_PACKAGE}/.ClipboardService"
-_CLIPGET_RE = re.compile(r'data="(?P<text>.*)"', re.DOTALL)
-
 # send_action() IME action name -> keycode (fallback path).
 _IME_ACTIONS = {
     "search": "KEYCODE_SEARCH",
@@ -627,28 +621,28 @@ class Device:
         except Exception:  # noqa: BLE001
             return False
 
-    # ── clipboard (via clipper) ──────────────────────────────────────────────
+    # ── clipboard (via autox's own server) ───────────────────────────────────
+    #
+    # Android 10+ restricts clipboard access to the foreground app or the active
+    # IME. autox's APK is both an a11y service and an IME, so it can read/write
+    # the clipboard when its IME is active — no external clipper app (which is
+    # dead on Android 16 anyway; its APK targets SDK 0).
 
-    def _ensure_clipper(self) -> None:
-        if not self._is_installed(CLIPPER_PACKAGE):
-            raise DeviceError(
-                f"clipboard needs the clipper app ({CLIPPER_PACKAGE}) — install it "
-                "(github.com/majido/clipper) via app_install(url), then retry"
-            )
-        self._d.shell(["am", "startservice", CLIPPER_SERVICE])
+    def _clipboard_rpc(self):
+        src = self.tree_source
+        if not hasattr(src, "clipboard_get"):
+            raise DeviceError("clipboard needs the RPC tree source (install autox-server.apk)")
+        self.keyboard.prepare()  # app must be the active IME for clipboard access
+        return src
 
     @property
     def clipboard(self) -> str | None:
-        """Read the clipboard text via clipper."""
-        self._ensure_clipper()
-        out = self._d.shell(["am", "broadcast", "-a", "clipper.get"])
-        m = _CLIPGET_RE.search(out)
-        return m.group("text") if m else None
+        """Read the clipboard text."""
+        return self._clipboard_rpc().clipboard_get() or None
 
     def set_clipboard(self, text: str, label: str | None = None) -> None:
-        """Set the clipboard text via clipper."""
-        self._ensure_clipper()
-        self._d.shell(["am", "broadcast", "-a", "clipper.set", "-e", "text", text])
+        """Set the clipboard text."""
+        self._clipboard_rpc().clipboard_set(text)
 
     # ── settings / waits / query factories ───────────────────────────────────
 

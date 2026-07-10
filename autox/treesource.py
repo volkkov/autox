@@ -173,6 +173,19 @@ class RpcTreeSource:
                 time.sleep(retry_delay)
         return None
 
+    def clipboard_get(self) -> str:
+        """Read the device clipboard via the server (the app owns clipboard
+        access as the active IME)."""
+        self.ensure_ready()
+        return self._http_get("/clipboard")
+
+    def clipboard_set(self, text: str) -> None:
+        import base64
+
+        self.ensure_ready()
+        b64 = base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii")
+        self._http_get(f"/clipset?b64={b64}")
+
     def ping(self) -> bool:
         """True only if autox's own server answers — a foreign server on the
         port (e.g. u2's "pong") fails the identity check."""
