@@ -48,14 +48,11 @@ public class AutoxAccessibilityService extends AccessibilityService {
                 && event.getParcelableData() == null) {
             List<CharSequence> texts = event.getText();
             if (texts != null && !texts.isEmpty()) {
-                StringBuilder sb = new StringBuilder();
-                for (CharSequence t : texts) {
-                    if (t != null) {
-                        sb.append(t);
-                    }
-                }
-                if (sb.length() > 0) {
-                    lastToast = sb.toString();
+                // The first entry is the toast message; later entries are the
+                // app label / icon description, so don't concatenate them.
+                CharSequence msg = texts.get(0);
+                if (msg != null && msg.length() > 0) {
+                    lastToast = msg.toString();
                     lastToastAt = SystemClock.uptimeMillis();
                 }
             }
