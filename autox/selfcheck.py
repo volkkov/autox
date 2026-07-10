@@ -58,10 +58,9 @@ def run(serial: str | None = None) -> _Check:
     c.run("connect", lambda: (autox.connect(serial), "attached")[1])
     dev = autox.connect(serial)
 
-    status = dev.tree_source_status()
     ping = getattr(dev.tree_source, "ping", None)
-    tree_ready = ping() if callable(ping) else True
-    c.record("tree_source", tree_ready, status)
+    tree_ready = ping() if callable(ping) else True  # brings the server up (enable + forward)
+    c.record("tree_source", tree_ready, "ready" if tree_ready else dev.tree_source_status())
 
     # ── UI tree (needs the RPC server) ───────────────────────────────────────
 

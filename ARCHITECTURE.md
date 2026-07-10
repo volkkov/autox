@@ -59,8 +59,12 @@ canonical build.
 1. **Build** — push to GitHub; `.github/workflows/build-apk.yml` builds
    `autox-server.apk` and uploads it as the `autox-server-apk` artifact. (Locally,
    with an Android SDK: `cd server && gradle wrapper --gradle-version 8.7 && ./gradlew assembleDebug`.)
-2. **Install** — `adb install -r app-debug.apk`.
-3. **Enable** — autox does this automatically on first `dump()`. Manual:
+2. **Install** — `scripts/install-server.sh app-debug.apk <serial>`. (CI signs each
+   build with an ephemeral debug key, so `adb install -r` across rebuilds fails on
+   a signature mismatch; the script uninstalls first. The server is stateless, so
+   nothing is lost.)
+3. **Enable** — autox does this automatically on first `dump()` (enable the
+   accessibility service + `adb forward`). Manual:
    ```
    adb shell settings put secure enabled_accessibility_services com.gitshrl.autox/com.gitshrl.autox.AutoxAccessibilityService
    adb shell settings put secure accessibility_enabled 1
