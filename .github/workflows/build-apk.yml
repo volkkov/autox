@@ -25,12 +25,12 @@ jobs:
       - uses: android-actions/setup-android@v3
 
       - name: Install SDK packages
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Build debug APK
         working-directory: server
         run: |
-          gradle wrapper --gradle-version 8.7
+          gradle wrapper --gradle-version 8.11.1
           ./gradlew assembleDebug --no-daemon --stacktrace
 
       - uses: actions/upload-artifact@v4

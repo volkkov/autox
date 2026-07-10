@@ -58,7 +58,7 @@ canonical build.
 
 1. **Build** — push to GitHub; `.github/workflows/build-apk.yml` builds
    `autox-server.apk` and uploads it as the `autox-server-apk` artifact. (Locally,
-   with an Android SDK: `cd server && gradle wrapper --gradle-version 8.7 && ./gradlew assembleDebug`.)
+   with an Android SDK: `cd server && gradle wrapper --gradle-version 8.11.1 && ./gradlew assembleDebug`.)
 2. **Install** — `scripts/install-server.sh app-debug.apk <serial>`. (CI signs each
    build with an ephemeral debug key, so `adb install -r` across rebuilds fails on
    a signature mismatch; the script uninstalls first. The server is stateless, so

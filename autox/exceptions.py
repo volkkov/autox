@@ -24,3 +24,13 @@ class UiAutomationNotConnectedError(BaseException):
     """Kept for API parity with uiautomator2. autox never raises it — it runs
     no device-side UiAutomation server, so there is no connection to lose — but
     macrox's recovery chain catches this type, so the name must resolve."""
+
+
+class UiObjectNotFoundError(BaseException):
+    """A selector matched no element — raised by the strict element operations
+    (``click``, ``get_text``, ``set_text``…) that u2 raises on, distinct from the
+    ``*_exists`` variants that return a bool."""
+
+
+class XPathElementNotFoundError(BaseException):
+    """An XPath query matched no node."""

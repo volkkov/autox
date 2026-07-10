@@ -18,7 +18,7 @@ import adbutils
 from autox.elements import compact_elements
 from autox.exceptions import DeviceError, HierarchyDumpError
 from autox.selector import Selector
-from autox.treesource import RpcTreeSource, TreeSource
+from autox.treesource import SERVER_PACKAGE, RpcTreeSource, TreeSource
 
 # u2 press() name -> Android keycode. Covers the names macrox's _safe_press
 # forwards plus the common d-pad/volume set.
@@ -49,7 +49,46 @@ _ORIENTATIONS = {"natural": 0, "n": 0, "left": 1, "l": 1, "upsidedown": 2, "u": 
 # Foreground app from `dumpsys window displays`. On Android 16 the focus line
 # moved here from `dumpsys window windows`; adbutils' stock app_current misses it
 # and falls back to a ~5s `dumpsys activity top`, so resolve it directly (~45ms).
-_FOCUS_RE = re.compile(r"mCurrentFocus=Window\{[^}]*\s(?P<pkg>[^\s/]+)/[^\s}]+\}")
+_FOCUS_RE = re.compile(r"mCurrentFocus=Window\{[^}]*\s(?P<pkg>[^\s/]+)/(?P<act>[^\s}]+)\}")
+
+# Clipboard: driven through the clipper app (github.com/majido/clipper), the
+# same tool u2 uses — neither adb nor autox's a11y server has a text-clipboard API.
+CLIPPER_PACKAGE = "ca.zgrs.clipper"
+CLIPPER_SERVICE = f"{CLIPPER_PACKAGE}/.ClipboardService"
+_CLIPGET_RE = re.compile(r'data="(?P<text>.*)"', re.DOTALL)
+
+# send_action() IME action name -> keycode (fallback path).
+_IME_ACTIONS = {
+    "search": "KEYCODE_SEARCH",
+    "go": "KEYCODE_ENTER",
+    "send": "KEYCODE_ENTER",
+    "next": "KEYCODE_TAB",
+    "done": "KEYCODE_ENTER",
+    "enter": "KEYCODE_ENTER",
+}
+# send_action() -> Android EditorInfo IME action codes (ADBKeyboard ADB_EDITOR_CODE).
+_IME_EDITOR_CODES = {"go": 2, "search": 3, "send": 4, "next": 5, "done": 6, "previous": 7}
+
+
+class Touch:
+    """Low-level touch injection — parity with ``u2.touch``. Uses
+    ``input motionevent`` (API 24+) to build custom gestures:
+    ``d.touch.down(x, y)`` / ``d.touch.move(x, y)`` / ``d.touch.up(x, y)``."""
+
+    def __init__(self, adb_device):
+        self._d = adb_device
+
+    def _event(self, action: str, x, y) -> None:
+        self._d.shell(["input", "motionevent", action, str(int(x)), str(int(y))])
+
+    def down(self, x, y) -> None:
+        self._event("DOWN", x, y)
+
+    def move(self, x, y) -> None:
+        self._event("MOVE", x, y)
+
+    def up(self, x, y) -> None:
+        self._event("UP", x, y)
 
 # swipe_ext finger direction -> (sx, sy, ex, ey) offsets in units of (dx, dy)
 # around screen center, where dx = scale·w/2 and dy = scale·h/2. Names the
@@ -171,15 +210,11 @@ class Device:
         """0/1/2/3 for natural/left/upsidedown/right. 0 on any read failure
         (matches the portrait lock autox and macrox enforce)."""
         try:
-            out = self._d.shell("dumpsys input")
-            m = re.search(r"SurfaceOrientation:\s*(\d)", out)
-            if m:
-                return int(m.group(1))
+            return int(self._d.rotation()) % 4
         except Exception:  # noqa: BLE001
             pass
         try:
-            out = self._d.shell(["settings", "get", "system", "user_rotation"])
-            return int(out.strip())
+            return int(self._d.shell(["settings", "get", "system", "user_rotation"]).strip())
         except Exception:  # noqa: BLE001
             return 0
 
@@ -233,38 +268,36 @@ class Device:
 
     def _screen_on(self) -> bool:
         try:
-            return "mWakefulness=Awake" in self._d.shell("dumpsys power")
+            return bool(self._d.is_screen_on())
         except Exception:  # noqa: BLE001
             return True
 
-    # ── touch / key primitives ───────────────────────────────────────────────
+    # ── touch / key primitives (adbutils where it has a robust one) ───────────
 
     def click(self, x, y) -> None:
-        px, py = self._abs_xy(x, y)
-        self._d.shell(["input", "tap", str(px), str(py)])
+        self._d.click(*self._abs_xy(x, y))
 
     def double_click(self, x, y, duration: float = 0.1) -> None:
         px, py = self._abs_xy(x, y)
-        self._d.shell(["input", "tap", str(px), str(py)])
+        self._d.click(px, py)
         time.sleep(duration)
-        self._d.shell(["input", "tap", str(px), str(py)])
+        self._d.click(px, py)
 
     def long_click(self, x, y, duration: float = 0.5) -> None:
+        # A same-point swipe with a long duration is the standard substitute for
+        # a long press (there is no long-tap primitive).
         px, py = self._abs_xy(x, y)
-        ms = int(duration * 1000)
-        # A same-point swipe with a long duration is the standard shell
-        # substitute for a long press (`input` has no long-tap).
-        self._d.shell(["input", "swipe", str(px), str(py), str(px), str(py), str(ms)])
+        self._d.swipe(px, py, px, py, duration)
 
     def swipe(self, x1, y1, x2, y2, duration: float = 0.5) -> None:
         sx, sy = self._abs_xy(x1, y1)
         ex, ey = self._abs_xy(x2, y2)
-        self._d.shell(["input", "swipe", str(sx), str(sy), str(ex), str(ey), str(int(duration * 1000))])
+        self._d.swipe(sx, sy, ex, ey, duration)
 
     def drag(self, x1, y1, x2, y2, duration: float = 0.5) -> None:
         sx, sy = self._abs_xy(x1, y1)
         ex, ey = self._abs_xy(x2, y2)
-        self._d.shell(["input", "draganddrop", str(sx), str(sy), str(ex), str(ey), str(int(duration * 1000))])
+        self._d.drag(sx, sy, ex, ey, duration)
 
     def swipe_ext(self, direction: str, scale: float = 0.9, duration: float = 0.3) -> None:
         off = _SWIPE_OFFSETS.get(direction)
@@ -273,24 +306,33 @@ class Device:
         w, h = self.window_size()
         cx, cy, dx, dy = w // 2, h // 2, int(scale * w / 2), int(scale * h / 2)
         sxo, syo, exo, eyo = off
-        sx, sy, ex, ey = cx + sxo * dx, cy + syo * dy, cx + exo * dx, cy + eyo * dy
-        self._d.shell(["input", "swipe", str(sx), str(sy), str(ex), str(ey), str(int(duration * 1000))])
+        self._d.swipe(cx + sxo * dx, cy + syo * dy, cx + exo * dx, cy + eyo * dy, duration)
 
     def press(self, key) -> None:
         """Press a key by u2 name ('home', 'back', 'enter'…), a raw
         'KEYCODE_*', or an integer keycode."""
         if isinstance(key, int):
-            code = str(key)
+            code = key
         else:
             k = str(key).lower()
             code = _KEYCODES.get(k) or (key if str(key).startswith("KEYCODE_") else f"KEYCODE_{str(key).upper()}")
-        self._d.shell(["input", "keyevent", code])
+        self._d.keyevent(code)
 
     # ── screenshot ───────────────────────────────────────────────────────────
 
     def screenshot(self):
         """PIL screenshot via adb ``screencap``."""
         return self._d.screenshot()
+
+    def start_recording(self, filename: str) -> None:
+        """Begin screen recording to a local ``filename`` (adbutils/scrcpy)."""
+        self._d.start_recording(filename)
+
+    def stop_recording(self) -> None:
+        self._d.stop_recording()
+
+    def is_recording(self) -> bool:
+        return bool(self._d.is_recording())
 
     # ── app / orientation / server-parity ────────────────────────────────────
 
@@ -312,12 +354,23 @@ class Device:
         self._d.shell(["settings", "put", "system", "accelerometer_rotation", "0" if freeze else "1"])
 
     def start_uiautomator(self) -> None:
-        """No-op — autox runs no device-side server. Present so macrox's
-        recovery chain (stop→start) is a harmless no-op instead of an
-        AttributeError."""
+        """Bring the tree source up (enable the a11y RPC server + forward).
+        Named for u2 parity; best-effort — a StaticTreeSource has nothing to do."""
+        ensure = getattr(self.tree_source, "ensure_ready", None)
+        if callable(ensure):
+            try:
+                ensure()
+            except Exception:  # noqa: BLE001 — bring-up is best-effort
+                pass
 
     def stop_uiautomator(self) -> None:
-        """No-op — see :meth:`start_uiautomator`."""
+        """No-op — the a11y server stays enabled for the session; see
+        :meth:`start_uiautomator`."""
+
+    def reset_uiautomator(self, reason: str = "") -> None:
+        """u2 parity: re-run tree-source bring-up. autox has no server to crash,
+        so this just re-ensures the a11y service is enabled and forwarded."""
+        self.start_uiautomator()
 
     # ── device control ───────────────────────────────────────────────────────
 
@@ -337,3 +390,286 @@ class Device:
         """Wake and dismiss an insecure keyguard."""
         self._d.shell(["input", "keyevent", "KEYCODE_WAKEUP"])
         self._d.shell(["wm", "dismiss-keyguard"])
+
+    def keyevent(self, key) -> None:
+        """Alias for :meth:`press` — u2 name."""
+        self.press(key)
+
+    def long_press(self, x, y, duration: float = 1.0) -> None:
+        self.long_click(x, y, duration=duration)
+
+    def open_url(self, url: str) -> None:
+        self._d.shell(["am", "start", "-a", "android.intent.action.VIEW", "-d", url])
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def pos_rel2abs(self, x, y) -> tuple[int, int]:
+        """Fractional (0-1) coordinates → absolute pixels."""
+        return self._abs_xy(x, y)
+
+    @property
+    def touch(self) -> Touch:
+        return Touch(self._d)
+
+    def swipe_points(self, points, duration: float = 0.5) -> None:
+        """Swipe through a path of (x, y) points as one continuous gesture."""
+        pts = [self._abs_xy(px, py) for px, py in points]
+        if len(pts) < 2:
+            raise ValueError("swipe_points needs at least 2 points")
+        step = max(duration / (len(pts) - 1), 0.01)
+        self.touch.down(*pts[0])
+        for px, py in pts[1:]:
+            time.sleep(step)
+            self.touch.move(px, py)
+        self.touch.up(*pts[-1])
+
+    # ── app management ───────────────────────────────────────────────────────
+
+    def app_current(self) -> dict:
+        """{"package", "activity"} of the foreground app."""
+        try:
+            m = _FOCUS_RE.search(self._d.shell(["dumpsys", "window", "displays"]))
+            if m:
+                return {"package": m.group("pkg"), "activity": m.group("act")}
+        except Exception:  # noqa: BLE001
+            pass
+        info = self._d.app_current()
+        return {"package": info.package, "activity": info.activity}
+
+    def app_stop(self, package: str) -> None:
+        self._d.app_stop(package)
+
+    def app_clear(self, package: str) -> None:
+        self._d.app_clear(package)
+
+    def app_install(self, path_or_url: str) -> None:
+        """Install an APK from a local path or an http(s) URL (adbutils handles
+        the download)."""
+        self._d.install(path_or_url, nolaunch=True)
+
+    def app_uninstall(self, package: str) -> bool:
+        """Uninstall a package. Returns whether it was installed beforehand."""
+        if not self._is_installed(package):
+            return False
+        self._d.uninstall(package)
+        return True
+
+    def app_list(self, filter_third_party: bool = False) -> list[str]:
+        """Installed package names. ``filter_third_party`` limits to user apps."""
+        if filter_third_party:
+            out = self._d.shell(["pm", "list", "packages", "-3"])
+            return sorted(line[8:].strip() for line in out.splitlines() if line.startswith("package:"))
+        return sorted(self._d.list_packages())
+
+    def app_list_running(self) -> list[str]:
+        """Installed packages that currently have a running process."""
+        installed = set(self.app_list())
+        try:
+            procs = self._d.shell(["ps", "-A", "-o", "NAME"])
+        except Exception:  # noqa: BLE001
+            procs = self._d.shell(["ps"])
+        running = {ln.strip().split(":", 1)[0] for ln in procs.splitlines()}
+        return sorted(installed & running)
+
+    def app_stop_all(self, excludes=()) -> list[str]:
+        """Force-stop every running third-party app except ``excludes``."""
+        excl = set(excludes)
+        stopped = []
+        for pkg in self.app_list_running():
+            if pkg in excl or pkg == SERVER_PACKAGE:
+                continue
+            self.app_stop(pkg)
+            stopped.append(pkg)
+        return stopped
+
+    def app_info(self, package: str) -> dict:
+        """Version/metadata via adbutils ``package_info``."""
+        pi = self._d.package_info(package)
+        if pi is None:
+            raise DeviceError(f"app not installed: {package}")
+        return {
+            "packageName": package,
+            "versionName": pi.get("version_name"),
+            "versionCode": pi.get("version_code"),
+            **pi,
+        }
+
+    def app_wait(self, package: str, timeout: float = 20.0, front: bool = False) -> bool:
+        """Wait until ``package`` is running (or foreground when ``front``)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if (self.app_current()["package"] == package) if front else (package in self.app_list_running()):
+                return True
+            time.sleep(0.5)
+        return False
+
+    def wait_activity(self, activity: str, timeout: float = 10.0) -> bool:
+        """Wait until the foreground activity contains ``activity``."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if activity in self.app_current()["activity"]:
+                return True
+            time.sleep(0.5)
+        return False
+
+    # ── files ────────────────────────────────────────────────────────────────
+
+    def push(self, src: str, dst: str) -> None:
+        self._d.sync.push(src, dst)
+
+    def pull(self, src: str, dst: str) -> None:
+        self._d.sync.pull(src, dst)
+
+    # ── device info ──────────────────────────────────────────────────────────
+
+    @property
+    def device_info(self) -> dict:
+        props = {
+            "serial": self.serial or self._d.serial,
+            "sdk": self._cached_sdk_int(),
+            "brand": self._getprop("ro.product.brand"),
+            "model": self._getprop("ro.product.model"),
+            "arch": self._getprop("ro.product.cpu.abi"),
+            "version": self._getprop("ro.build.version.release"),
+        }
+        return props
+
+    def _getprop(self, name: str) -> str:
+        try:
+            return self._d.getprop(name) or ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @property
+    def wlan_ip(self) -> str | None:
+        try:
+            return self._d.wlan_ip() or None
+        except Exception:  # noqa: BLE001
+            return self._getprop("dhcp.wlan0.ipaddress") or None
+
+    @property
+    def orientation(self) -> str:
+        """Current rotation name: natural/left/upsidedown/right."""
+        return ("natural", "left", "upsidedown", "right")[self._display_rotation() % 4]
+
+    # ── text input / IME ─────────────────────────────────────────────────────
+
+    @property
+    def keyboard(self):
+        """autox's bundled IME driver (lazy)."""
+        if getattr(self, "_keyboard", None) is None:
+            from autox.keyboard import AutoxKeyboard
+
+            self._keyboard = AutoxKeyboard(self._d)
+        return self._keyboard
+
+    def _type_text(self, text: str) -> None:
+        # All typing goes through ADBKeyboard (UTF-8/emoji/spaces); fall back to
+        # adb `input text` (ASCII) only if ADBKeyboard can't be brought up.
+        if not self.keyboard.type(text):
+            self._d.send_keys(text)
+
+    def send_keys(self, text: str, clear: bool = False) -> None:
+        """Type into the focused field; ``clear`` wipes it first."""
+        if clear:
+            self.clear_text()
+        self._type_text(text)
+
+    def clear_text(self, count: int = 120) -> None:
+        """Clear the focused field via ADBKeyboard's ADB_CLEAR_TEXT; fall back to
+        cursor-to-end then a burst of deletes."""
+        if self.keyboard.clear():
+            return
+        self._d.shell(["input", "keyevent", "KEYCODE_MOVE_END"])
+        self._d.shell("input keyevent " + ("67 " * count).strip())  # 67 = KEYCODE_DEL
+
+    def send_action(self, action: str = "search") -> None:
+        """Trigger an IME action (search/go/next/done/send) — via ADBKeyboard's
+        editor action, falling back to a keyevent."""
+        code = _IME_EDITOR_CODES.get(action.lower())
+        if code is not None and self.keyboard.editor_action(code):
+            return
+        self._d.shell(["input", "keyevent", _IME_ACTIONS.get(action.lower(), "KEYCODE_ENTER")])
+
+    def hide_keyboard(self) -> None:
+        """Dismiss the soft keyboard if one is shown (BACK routes to the IME)."""
+        try:
+            shown = "mInputShown=true" in (self._d.shell("dumpsys input_method") or "")
+        except Exception:  # noqa: BLE001
+            shown = False
+        if shown:
+            self.press("back")
+
+    def current_ime(self) -> str:
+        return (self._d.shell("settings get secure default_input_method") or "").strip()
+
+    def set_input_ime(self, ime: str) -> None:
+        self._d.shell(["ime", "enable", ime])
+        self._d.shell(["ime", "set", ime])
+
+    def is_input_ime_installed(self, ime: str) -> bool:
+        try:
+            return ime in (self._d.shell(["ime", "list", "-a", "-s"]) or "")
+        except Exception:  # noqa: BLE001
+            return False
+
+    # ── clipboard (via clipper) ──────────────────────────────────────────────
+
+    def _ensure_clipper(self) -> None:
+        if not self._is_installed(CLIPPER_PACKAGE):
+            raise DeviceError(
+                f"clipboard needs the clipper app ({CLIPPER_PACKAGE}) — install it "
+                "(github.com/majido/clipper) via app_install(url), then retry"
+            )
+        self._d.shell(["am", "startservice", CLIPPER_SERVICE])
+
+    @property
+    def clipboard(self) -> str | None:
+        """Read the clipboard text via clipper."""
+        self._ensure_clipper()
+        out = self._d.shell(["am", "broadcast", "-a", "clipper.get"])
+        m = _CLIPGET_RE.search(out)
+        return m.group("text") if m else None
+
+    def set_clipboard(self, text: str, label: str | None = None) -> None:
+        """Set the clipboard text via clipper."""
+        self._ensure_clipper()
+        self._d.shell(["am", "broadcast", "-a", "clipper.set", "-e", "text", text])
+
+    # ── settings / waits / query factories ───────────────────────────────────
+
+    @property
+    def settings(self) -> dict:
+        if getattr(self, "_settings", None) is None:
+            self._settings = {"wait_timeout": 20.0, "xpath_timeout": 10.0, "operation_delay": (0, 0)}
+        return self._settings
+
+    def implicitly_wait(self, seconds: float | None = None) -> float:
+        """Get or set the default element wait timeout (u2 parity)."""
+        if seconds is not None:
+            self.settings["wait_timeout"] = seconds
+        return self.settings["wait_timeout"]
+
+    @property
+    def wait_timeout(self) -> float:
+        return self.settings["wait_timeout"]
+
+    def xpath(self, xpath: str):
+        """``d.xpath('//node[@text="OK"]')`` → an :class:`~autox.xpath.XPathSelector`."""
+        from autox.xpath import XPathSelector
+
+        return XPathSelector(self, xpath)
+
+    @property
+    def watcher(self):
+        from autox.watcher import Watcher
+
+        if getattr(self, "_watcher", None) is None:
+            self._watcher = Watcher(self)
+        return self._watcher
+
+    def watch_context(self, builtin: bool = False):
+        from autox.watcher import WatchContext
+
+        return WatchContext(self, builtin=builtin)

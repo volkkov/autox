@@ -24,8 +24,9 @@ autox splits the problem cleanly (ADR 0001):
 from autox import exceptions
 from autox.device import Device
 from autox.elements import compact_elements, compact_elements_json
-from autox.selector import Selector
+from autox.selector import Selector, UiObject
 from autox.treesource import RpcTreeSource, StaticTreeSource, TreeSource
+from autox.xpath import XPathSelector
 
 __version__ = "0.1.0"
 
@@ -33,6 +34,8 @@ __all__ = [
     "connect",
     "Device",
     "Selector",
+    "UiObject",
+    "XPathSelector",
     "TreeSource",
     "RpcTreeSource",
     "StaticTreeSource",

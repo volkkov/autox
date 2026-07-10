@@ -20,5 +20,19 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <!-- Bundled text-input IME (ADBKeyboard reimplementation) -->
+        <service
+            android:name=".AutoxIME"
+            android:exported="true"
+            android:label="@string/ime_label"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
     </application>
 </manifest>
