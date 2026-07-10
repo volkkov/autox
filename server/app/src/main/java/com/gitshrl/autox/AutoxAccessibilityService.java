@@ -1,7 +1,9 @@
 package com.gitshrl.autox;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.GestureDescription;
 import android.content.Intent;
+import android.graphics.Path;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -10,6 +12,8 @@ import android.view.accessibility.AccessibilityEvent;
 import android.widget.Toast;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The device-side half of autox: an AccessibilityService that reads the live UI
@@ -69,6 +73,41 @@ public class AutoxAccessibilityService extends AccessibilityService {
 
     void showToast(final String text) {
         new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(this, text, Toast.LENGTH_SHORT).show());
+    }
+
+    /** Dispatch a multi-touch gesture; each stroke is {x1,y1,x2,y2}, all run
+     * simultaneously (two strokes make a pinch). Returns whether it completed. */
+    boolean dispatchStrokes(int[][] strokes, long durationMs) {
+        GestureDescription.Builder builder = new GestureDescription.Builder();
+        for (int[] s : strokes) {
+            Path path = new Path();
+            path.moveTo(s[0], s[1]);
+            path.lineTo(s[2], s[3]);
+            builder.addStroke(new GestureDescription.StrokeDescription(path, 0, Math.max(durationMs, 1)));
+        }
+        final boolean[] completed = {false};
+        final CountDownLatch latch = new CountDownLatch(1);
+        boolean dispatched = dispatchGesture(builder.build(), new GestureResultCallback() {
+            @Override
+            public void onCompleted(GestureDescription gesture) {
+                completed[0] = true;
+                latch.countDown();
+            }
+
+            @Override
+            public void onCancelled(GestureDescription gesture) {
+                latch.countDown();
+            }
+        }, null);
+        if (!dispatched) {
+            return false;
+        }
+        try {
+            latch.await(durationMs + 1500, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return completed[0];
     }
 
     @Override

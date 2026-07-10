@@ -179,6 +179,13 @@ class RpcTreeSource:
                 time.sleep(retry_delay)
         return None
 
+    def gesture(self, strokes, duration_ms: int = 300) -> None:
+        """Dispatch a multi-touch gesture. ``strokes`` is a list of (x1,y1,x2,y2);
+        all run simultaneously (two strokes = pinch)."""
+        self.ensure_ready()
+        s = ";".join(f"{x1},{y1},{x2},{y2}" for (x1, y1, x2, y2) in strokes)
+        self._http_get(f"/gesture?strokes={s}&dur={int(duration_ms)}")
+
     def get_toast(self) -> tuple[int, str] | None:
         """(age_ms, text) of the last toast the a11y server captured, or None.
         age_ms is -1 when no toast has been seen."""

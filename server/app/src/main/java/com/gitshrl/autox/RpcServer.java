@@ -112,6 +112,8 @@ final class RpcServer implements Runnable {
                 // Distinctive identity so the client can tell autox's server
                 // apart from a foreign server squatting on the port.
                 body = "autox-rpc 0.1.0";
+            } else if (path.startsWith("/gesture")) {
+                body = dispatchGesture(queryParam(path, "strokes"), queryParam(path, "dur"));
             } else if (path.startsWith("/toastshow")) {
                 String b64 = queryParam(path, "b64");
                 if (b64 != null) {
@@ -149,6 +151,33 @@ final class RpcServer implements Runnable {
                 socket.close();
             } catch (IOException ignored) {
             }
+        }
+    }
+
+    private String dispatchGesture(String strokesParam, String durParam) {
+        if (strokesParam == null || strokesParam.isEmpty()) {
+            return "no strokes";
+        }
+        long dur = 300;
+        if (durParam != null) {
+            try {
+                dur = Long.parseLong(durParam);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        try {
+            String[] parts = strokesParam.split(";");
+            int[][] strokes = new int[parts.length][];
+            for (int i = 0; i < parts.length; i++) {
+                String[] c = parts[i].split(",");
+                strokes[i] = new int[]{
+                        Integer.parseInt(c[0]), Integer.parseInt(c[1]),
+                        Integer.parseInt(c[2]), Integer.parseInt(c[3]),
+                };
+            }
+            return service.dispatchStrokes(strokes, dur) ? "ok" : "cancelled";
+        } catch (RuntimeException e) {
+            return "bad strokes";
         }
     }
 

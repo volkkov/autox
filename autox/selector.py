@@ -293,6 +293,33 @@ class UiObject:
         """Fling the element in ``direction`` (fast)."""
         self.swipe(direction, scale=0.9, duration=0.05)
 
+    def gesture(self, start1, start2, end1, end2, duration: float = 0.3) -> None:
+        """Two-finger gesture — finger 1 goes ``start1``→``end1``, finger 2
+        ``start2``→``end2`` (each an (x, y) in absolute pixels). Dispatched as
+        real multi-touch via the a11y server."""
+        self._device.gesture(
+            [(start1[0], start1[1], end1[0], end1[1]), (start2[0], start2[1], end2[0], end2[1])],
+            duration=duration,
+        )
+
+    def pinch_in(self, percent: int = 80, duration: float = 0.3) -> None:
+        """Two fingers move from the element's edges toward its center (zoom out)."""
+        self._pinch(percent, duration, outward=False)
+
+    def pinch_out(self, percent: int = 80, duration: float = 0.3) -> None:
+        """Two fingers move from the element's center toward its edges (zoom in)."""
+        self._pinch(percent, duration, outward=True)
+
+    def _pinch(self, percent: int, duration: float, outward: bool) -> None:
+        x1, y1, x2, y2 = self._require().bounds
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        far = int(min(x2 - x1, y2 - y1) * max(min(percent, 100), 1) / 100 / 2)
+        near = max(far // 5, 5)
+        if outward:
+            self.gesture((cx - near, cy), (cx + near, cy), (cx - far, cy), (cx + far, cy), duration)
+        else:
+            self.gesture((cx - far, cy), (cx + far, cy), (cx - near, cy), (cx + near, cy), duration)
+
     def _fill(self, node: MatchedNode, text: str | None, clear: bool) -> None:
         """Type into the field via autox's IME (UTF-8), re-focusing after the IME
         switch so the input connection binds. Falls back to adb input text

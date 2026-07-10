@@ -84,7 +84,7 @@ u2). Kwargs: `text/textContains/textMatches/textStartsWith`,
 | `count` `len()` `[i]` `iter()` | same | ✅ |
 | `child` `child_by_text` `child_by_description` `child_by_instance` | same | ✅ |
 | `sibling` `parent` `left` `right` `up` `down` | same | ✅ |
-| `pinch_in` `pinch_out` `gesture` | — | 🚫 multi-touch; plan: `/gesture` RPC → `dispatchGesture` |
+| `pinch_in` `pinch_out` `gesture` | same | ✅ real multi-touch via `/gesture` RPC → `dispatchGesture` |
 
 ## XPath — `d.xpath(...)`
 
@@ -113,6 +113,5 @@ u2). Kwargs: `text/textContains/textMatches/textStartsWith`,
 | --- | --- | --- |
 | `image` (template match) | needs OpenCV | optional `autox[image]` extra + `cv2.matchTemplate` over `screenshot()` |
 | `last_traversed_text` / `clear_traversed_text` | needs the a11y **event** stream (rarely used) | buffer traversal events in the server like toasts |
-| `pinch_in/out`, `gesture` | multi-finger injection | add `/gesture` RPC → `AccessibilityService.dispatchGesture` |
 | `jsonrpc` / `jsonrpc_call` | ➖ | n/a — autox has no jsonrpc server; the a11y RPC replaces it |
 | `debug` / `show_touch_trace` / `show_float_window` | dev toggles | `settings put system show_touches 1` if needed; low value |

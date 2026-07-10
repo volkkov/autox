@@ -441,6 +441,15 @@ class Device:
     def touch(self) -> Touch:
         return Touch(self._d)
 
+    def gesture(self, strokes, duration: float = 0.3) -> None:
+        """Dispatch a multi-touch gesture through the a11y server (real touch, via
+        ``dispatchGesture``). Each stroke is ``(x1, y1, x2, y2)``; all strokes run
+        simultaneously — two strokes make a pinch."""
+        src = self.tree_source
+        if not hasattr(src, "gesture"):
+            raise DeviceError("gesture needs the RPC tree source (install autox-server.apk)")
+        src.gesture([tuple(int(v) for v in s) for s in strokes], int(duration * 1000))
+
     def swipe_points(self, points, duration: float = 0.5) -> None:
         """Swipe through a path of (x, y) points as one continuous gesture."""
         pts = [self._abs_xy(px, py) for px, py in points]

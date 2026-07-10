@@ -37,6 +37,10 @@ class FakeDevice:
     def click(self, x, y):
         self.taps.append((x, y))
 
+    def gesture(self, strokes, duration=0.3):
+        self.gestures = getattr(self, "gestures", [])
+        self.gestures.append((strokes, duration))
+
 
 @pytest.fixture
 def fake_device(home_xml):
