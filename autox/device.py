@@ -1,15 +1,13 @@
-"""The device driver — a uiautomator2-compatible surface with no device-side
-server.
+"""The device driver — a uiautomator2-compatible surface, uiautomator-free.
 
-Everything runs from the client over adb: the hierarchy comes from the AOSP
-``uiautomator dump`` binary (which keeps working on Android 16, unlike u2's
-jsonrpc server), selectors resolve in :mod:`autox.selector`, and actions go
-through ``input`` / ``cmd`` / ``settings``. There is nothing to install on the
-device and nothing to keep alive, so bring-up is instant and there is no
-accessibility server to lose mid-session.
+The UI tree comes through the :class:`~autox.treesource.TreeSource` seam (in
+production, the device-side AccessibilityService RPC server — no uiautomator, see
+ADR 0001); selectors resolve in :mod:`autox.selector`; actions go through adb
+``input`` / ``cmd`` / ``settings``. Controls need nothing on the device; only the
+tree needs the RPC server enabled.
 
 The method set mirrors the slice of u2 that macrox calls, so macrox can switch
-``import uiautomator2 as u2`` to ``import autox as u2`` unchanged.
+``import uiautomator2 as u2`` to ``import autox as ax`` and drive it unchanged.
 """
 
 import re
@@ -17,16 +15,10 @@ import time
 
 import adbutils
 
-from autox.dump import trim_hierarchy_xml
 from autox.elements import compact_elements
 from autox.exceptions import DeviceError, HierarchyDumpError
 from autox.selector import Selector
-
-# Scratch file the shell dump writes to, then we cat back.
-_DUMP_PATH = "/sdcard/autox_hierarchy.xml"
-# `uiautomator dump` spins up its own instrumentation each call (~2.5 s on
-# Android 16); give the shell room but still bound it.
-_DUMP_TIMEOUT = 20.0
+from autox.treesource import RpcTreeSource, TreeSource
 
 # u2 press() name -> Android keycode. Covers the names macrox's _safe_press
 # forwards plus the common d-pad/volume set.
@@ -54,6 +46,11 @@ _KEYCODES = {
 # set_orientation() name -> user_rotation value.
 _ORIENTATIONS = {"natural": 0, "n": 0, "left": 1, "l": 1, "upsidedown": 2, "u": 2, "right": 3, "r": 3}
 
+# Foreground app from `dumpsys window displays`. On Android 16 the focus line
+# moved here from `dumpsys window windows`; adbutils' stock app_current misses it
+# and falls back to a ~5s `dumpsys activity top`, so resolve it directly (~45ms).
+_FOCUS_RE = re.compile(r"mCurrentFocus=Window\{[^}]*\s(?P<pkg>[^\s/]+)/[^\s}]+\}")
+
 # swipe_ext finger direction -> (sx, sy, ex, ey) offsets in units of (dx, dy)
 # around screen center, where dx = scale·w/2 and dy = scale·h/2. Names the
 # FINGER's travel (u2's convention); macrox inverts content→finger before
@@ -69,10 +66,9 @@ _SWIPE_OFFSETS = {
 class Toast:
     """Toast reader stub — parity with ``u2.toast``.
 
-    Reading toasts needs the accessibility event stream, which requires a
-    device-side service autox deliberately does without. ``get_message`` always
-    returns the default; macrox already treats a missing toast as "No toast
-    message"."""
+    Reading toasts needs the accessibility event stream. The RPC server exposes
+    only the tree (``/dump``), not events, so ``get_message`` returns the
+    default; macrox already treats a missing toast as "No toast message"."""
 
     def get_message(self, wait_timeout: float = 10.0, cache_timeout: float = 10.0, default=None):
         return default
@@ -81,14 +77,28 @@ class Toast:
 class Device:
     """A single Android device, driven entirely over adb."""
 
-    def __init__(self, serial: str | None = None, host: str = "127.0.0.1", port: int = 5037):
+    def __init__(
+        self,
+        serial: str | None = None,
+        host: str = "127.0.0.1",
+        port: int = 5037,
+        tree_source: TreeSource | None = None,
+    ):
         self.serial = serial
         try:
             self._adb = adbutils.AdbClient(host=host, port=port)
             self._d: adbutils.AdbDevice = self._adb.device(serial)
         except Exception as e:  # noqa: BLE001 — surface as our own error type
             raise DeviceError(f"could not attach to device {serial!r}: {e}") from e
+        # The UI tree comes through this seam. Default: the device-side
+        # AccessibilityService RPC server. Inject a StaticTreeSource for tests.
+        self.tree_source: TreeSource = tree_source or RpcTreeSource(self._d)
         self.toast = Toast()
+        # Immutable device props, read once on first info access (keeps connect
+        # side-effect-free while sparing the getprop round-trips on every later
+        # info read — macrox reads .info ~twice per agent step).
+        self._sdk_int: int | None = None
+        self._product_name: str | None = None
 
     # ── raw adb device passthrough ───────────────────────────────────────────
 
@@ -104,36 +114,31 @@ class Device:
     # ── hierarchy ────────────────────────────────────────────────────────────
 
     def dump_hierarchy(self, compressed: bool = True, pretty: bool = False, max_depth: int = 50) -> str:
-        """UI hierarchy XML via the AOSP ``uiautomator dump`` binary.
+        """UI hierarchy XML from the :class:`~autox.treesource.TreeSource`.
 
-        Signature mirrors u2's; the shell binary always returns the full,
-        uncompressed tree, so ``compressed``/``pretty``/``max_depth`` are
-        accepted for drop-in parity but not applied (macrox filters the tree
-        itself). Raises :class:`HierarchyDumpError` on a dead tree — matching
-        u2, which raises on dump failure so callers fall through their
-        recovery paths."""
+        Signature mirrors u2's; the RPC server returns the full tree, so
+        ``compressed``/``pretty``/``max_depth`` are accepted for drop-in parity
+        but not applied (macrox filters the tree itself). Raises
+        :class:`HierarchyDumpError` on a dead tree — matching u2, which raises on
+        dump failure so callers fall through their recovery paths."""
         xml = self.dump_hierarchy_or_none()
         if xml is None:
-            raise HierarchyDumpError("uiautomator dump produced no hierarchy (secure window or unavailable tree)")
+            raise HierarchyDumpError(
+                "no hierarchy — the accessibility RPC server is not reachable "
+                f"({self.tree_source_status()}) or the tree is empty"
+            )
         return xml
 
     def dump_hierarchy_or_none(self) -> str | None:
-        """Like :meth:`dump_hierarchy` but returns None instead of raising —
-        the form :class:`Selector` uses so a missing tree is a quiet miss."""
-        try:
-            status = self._d.shell(["uiautomator", "dump", _DUMP_PATH], timeout=_DUMP_TIMEOUT)
-        except Exception:  # noqa: BLE001 — adb/transport hiccup ⇒ treat as no tree
-            return None
-        # AOSP prints "UI hierchary dumped to: <path>" (sic) on success; anything
-        # else ("ERROR: could not get idle state", "null root node…") means the
-        # file is absent or stale, so don't trust a cat of it.
-        if "dumped" not in status.lower():
-            return None
-        try:
-            raw = self._d.shell(["cat", _DUMP_PATH], timeout=_DUMP_TIMEOUT)
-        except Exception:  # noqa: BLE001
-            return None
-        return trim_hierarchy_xml(raw)
+        """Like :meth:`dump_hierarchy` but returns None instead of raising — the
+        form :class:`Selector` uses so a missing tree is a quiet miss. Transient
+        retries live in the tree source, not here."""
+        return self.tree_source.dump()
+
+    def tree_source_status(self) -> str:
+        """Human-readable state of the tree source (for bring-up / selfcheck)."""
+        status = getattr(self.tree_source, "status", None)
+        return status() if callable(status) else type(self.tree_source).__name__
 
     def dump_elements(self, screen: tuple[int, int] | None = None) -> list[dict]:
         """The current screen as a compact list of actionable/labelled elements
@@ -178,31 +183,50 @@ class Device:
         except Exception:  # noqa: BLE001
             return 0
 
+    def _cached_sdk_int(self) -> int:
+        if self._sdk_int is None:
+            try:
+                self._sdk_int = int(self._d.getprop("ro.build.version.sdk"))
+            except Exception:  # noqa: BLE001
+                self._sdk_int = 0
+        return self._sdk_int
+
+    def _cached_product_name(self) -> str:
+        if self._product_name is None:
+            try:
+                self._product_name = self._d.getprop("ro.product.name") or ""
+            except Exception:  # noqa: BLE001
+                self._product_name = ""
+        return self._product_name
+
+    def _foreground_package(self) -> str | None:
+        try:
+            m = _FOCUS_RE.search(self._d.shell(["dumpsys", "window", "displays"]))
+            if m:
+                return m.group("pkg")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return self._d.app_current().package
+        except Exception:  # noqa: BLE001
+            return None
+
     @property
     def info(self) -> dict:
         """u2-shaped device info. macrox reads ``displayRotation``; the rest is
-        provided for parity and is cheap best-effort."""
+        provided for parity. The immutable props (sdkInt, productName) are cached
+        after first read so repeated ``.info`` access — macrox reads it ~twice
+        per step — doesn't re-run getprop."""
         w, h = self.window_size()
         rotation = self._display_rotation()
-        try:
-            sdk = int(self._d.getprop("ro.build.version.sdk"))
-        except Exception:  # noqa: BLE001
-            sdk = 0
-        try:
-            product = self._d.getprop("ro.product.name")
-        except Exception:  # noqa: BLE001
-            product = ""
-        try:
-            package = self._d.app_current().package
-        except Exception:  # noqa: BLE001
-            package = None
+        package = self._foreground_package()
         return {
             "currentPackageName": package,
             "displayWidth": w,
             "displayHeight": h,
             "displayRotation": rotation,
-            "sdkInt": sdk,
-            "productName": product,
+            "sdkInt": self._cached_sdk_int(),
+            "productName": self._cached_product_name(),
             "screenOn": self._screen_on(),
             "naturalOrientation": rotation in (0, 2),
         }

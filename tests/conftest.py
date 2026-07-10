@@ -23,12 +23,16 @@ def home_xml():
 class FakeDevice:
     """Stand-in for Device in Selector tests: serves a fixed dump, records taps."""
 
-    def __init__(self, xml):
+    def __init__(self, xml, screen=(720, 1600)):
         self.xml = xml
+        self.screen = screen
         self.taps: list[tuple[int, int]] = []
 
     def dump_hierarchy_or_none(self):
         return self.xml
+
+    def window_size(self):
+        return self.screen
 
     def click(self, x, y):
         self.taps.append((x, y))

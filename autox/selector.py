@@ -78,12 +78,15 @@ def _predicates(kwargs: dict):
     return preds, instance
 
 
-def match_nodes(xml: str | None, kwargs: dict) -> list[MatchedNode]:
+def match_nodes(xml: str | None, kwargs: dict, screen: tuple[int, int] | None = None) -> list[MatchedNode]:
     """Every node in ``xml`` satisfying all of ``kwargs``, in document order.
 
     Zero-area nodes are dropped: they are invisible and untappable, and a
-    selector that resolved to one would tap a garbage coordinate. ``instance``
-    is not applied here — the caller indexes the returned list — so a selector's
+    selector that resolved to one would tap a garbage coordinate. When ``screen``
+    = (w, h) is given, fully off-screen nodes are dropped too — so a selector
+    resolves to the same visible elements the agent saw in the compact element
+    list, and instance 0 can't land on an off-screen namesake. ``instance`` is
+    not applied here — the caller indexes the returned list — so a selector's
     full match set stays inspectable.
     """
     if not xml:
@@ -93,12 +96,16 @@ def match_nodes(xml: str | None, kwargs: dict) -> list[MatchedNode]:
         root = ET.fromstring(xml)
     except ET.ParseError:
         return []
+    sw, sh = screen if screen else (None, None)
     out: list[MatchedNode] = []
     for node in root.iter("node"):
         if not all(_matches(mode, node.attrib.get(attr, ""), wanted) for attr, mode, wanted in preds):
             continue
         bounds = parse_bounds(node.attrib.get("bounds", ""))
         if bounds is None or not is_tappable_area(bounds):
+            continue
+        x1, y1, x2, y2 = bounds
+        if sw and sh and (x2 <= 0 or y2 <= 0 or x1 >= sw or y1 >= sh):  # fully off-screen
             continue
         out.append(MatchedNode(dict(node.attrib), bounds))
     return out
@@ -118,9 +125,20 @@ class Selector:
         # Validate + extract instance now so a bad selector raises at
         # construction, not deep inside a click.
         _, self._instance = _predicates(dict(kwargs))
+        self._screen: tuple[int, int] | None = None
+
+    def _screen_size(self) -> tuple[int, int] | None:
+        """Window size for off-screen culling, fetched once. (0, 0) — treated as
+        "unknown" by match_nodes — if the device can't report it."""
+        if self._screen is None:
+            try:
+                self._screen = self._device.window_size()
+            except Exception:  # noqa: BLE001 — culling is best-effort
+                self._screen = (0, 0)
+        return self._screen
 
     def _find(self) -> list[MatchedNode]:
-        return match_nodes(self._device.dump_hierarchy_or_none(), self._kwargs)
+        return match_nodes(self._device.dump_hierarchy_or_none(), self._kwargs, self._screen_size())
 
     @property
     def exists(self) -> bool:

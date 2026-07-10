@@ -1,7 +1,9 @@
 """Pure helpers for the UI hierarchy XML — no device, no I/O, unit-testable.
 
-The device-side dump lives in :mod:`autox.device`; everything here operates on
-the raw string it returns.
+The tree source (:mod:`autox.treesource`) fetches the raw XML; everything here
+operates on that string. The XML schema is uiautomator's — ``<hierarchy>`` of
+``<node>`` with ``bounds``/``text``/``resource-id``/``class`` — which the RPC
+server emits verbatim, so the parser and selectors are source-agnostic.
 """
 
 import re
@@ -12,13 +14,11 @@ _BOUNDS_RE = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 
 
 def trim_hierarchy_xml(raw: str) -> str | None:
-    """Return just the ``<?xml…</hierarchy>`` document from a raw dump.
+    """Return just the ``<?xml…</hierarchy>`` document from a raw response.
 
-    The AOSP ``uiautomator dump`` binary appends a human-readable status line
-    ("UI hierarchy dumped to: …") when it writes to stdout/``/dev/tty``, and a
-    ``cat`` of the scratch file can carry a trailing newline. Slice the well-
-    formed document out so :func:`xml.etree.ElementTree.fromstring` never chokes
-    on trailing junk. ``None`` when no hierarchy is present (a failed dump)."""
+    Slices the well-formed document out of any surrounding whitespace or trailing
+    bytes so :func:`xml.etree.ElementTree.fromstring` never chokes on junk.
+    ``None`` when no hierarchy is present (a failed/empty dump)."""
     if not raw:
         return None
     start = raw.find("<?xml")

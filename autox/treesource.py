@@ -1,0 +1,156 @@
+"""The tree-source seam: where autox gets the UI hierarchy.
+
+autox reads the accessibility tree through one small interface — :class:`TreeSource`,
+a single ``dump() -> str | None`` that returns uiautomator-compatible hierarchy
+XML (or None for a dead tree). Everything downstream — selectors, the compact
+element list, ``dump_hierarchy`` — sits on that one method, so swapping how the
+tree is produced never touches them.
+
+Two adapters make the seam real, not hypothetical:
+
+* :class:`RpcTreeSource` — the production path. Talks over ``adb forward`` to the
+  device-side AccessibilityService RPC server (``server/``), which walks the live
+  a11y tree and returns the XML. No uiautomator, no ``am instrument``, no jsonrpc
+  server to NPE on Android 16 (see ADR 0001).
+* :class:`StaticTreeSource` — serves a fixed XML string. Lets the whole client
+  (selectors, elements) be tested with no device and no server.
+
+The XML the server emits matches uiautomator's schema exactly (``<hierarchy>`` of
+``<node>`` with bounds/text/resource-id/class/clickable/…), so the parser in
+:mod:`autox.dump` and the selectors in :mod:`autox.selector` are unchanged.
+"""
+
+import logging
+import urllib.error
+import urllib.request
+from typing import Protocol, runtime_checkable
+
+from autox.dump import trim_hierarchy_xml
+
+logger = logging.getLogger(__name__)
+
+# Device-side RPC server coordinates. The AccessibilityService in server/ binds
+# this port on the device loopback; `adb forward` bridges the same port on the
+# host. Package/service must match server/AndroidManifest.xml.
+DEFAULT_RPC_PORT = 9008
+SERVER_PACKAGE = "com.gitshrl.autox"
+SERVER_SERVICE = f"{SERVER_PACKAGE}/{SERVER_PACKAGE}.AutoxAccessibilityService"
+
+
+@runtime_checkable
+class TreeSource(Protocol):
+    """Produces the current UI hierarchy as uiautomator-compatible XML, or None
+    for a dead/unavailable tree."""
+
+    def dump(self) -> str | None: ...
+
+
+class StaticTreeSource:
+    """A :class:`TreeSource` that always returns the same XML — for tests and
+    for replaying a captured hierarchy."""
+
+    def __init__(self, xml: str | None):
+        self._xml = xml
+
+    def dump(self) -> str | None:
+        return self._xml
+
+
+class ServerUnavailableError(RuntimeError):
+    """The device-side RPC server could not be reached — not installed, not
+    enabled as an accessibility service, or not yet started."""
+
+
+class RpcTreeSource:
+    """Reads the a11y tree from the device-side AccessibilityService over HTTP.
+
+    Bring-up (install the APK, enable the service, forward the port) is done once
+    lazily on the first :meth:`dump`; enabling and forwarding are idempotent.
+    Installing the APK is the user's step — it must be built from ``server/``
+    first (the build needs an Android SDK); :meth:`status` reports what is
+    missing.
+    """
+
+    def __init__(self, adb_device, port: int = DEFAULT_RPC_PORT, connect_timeout: float = 5.0):
+        self._d = adb_device
+        self._port = port
+        self._timeout = connect_timeout
+        self._ready = False
+
+    # ── bring-up ─────────────────────────────────────────────────────────────
+
+    def _is_installed(self) -> bool:
+        try:
+            return bool(self._d.shell(f"pm path {SERVER_PACKAGE}").strip())
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _enabled_services(self) -> str:
+        try:
+            return self._d.shell("settings get secure enabled_accessibility_services") or ""
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def ensure_ready(self) -> None:
+        """Enable the accessibility service and forward the port (idempotent).
+        Raises :class:`ServerUnavailableError` if the APK isn't installed."""
+        if not self._is_installed():
+            raise ServerUnavailableError(
+                f"{SERVER_PACKAGE} is not installed — build server/ (needs an Android SDK; "
+                "the repo's CI builds autox-server.apk) and `adb install -r autox-server.apk`"
+            )
+        enabled = self._enabled_services()
+        if SERVER_SERVICE not in enabled:
+            merged = SERVER_SERVICE if not enabled.strip() or enabled.strip() == "null" else f"{enabled}:{SERVER_SERVICE}"
+            self._d.shell(f"settings put secure enabled_accessibility_services {merged}")
+            self._d.shell("settings put secure accessibility_enabled 1")
+        # Bridge host:port -> device:port. adbutils forward is idempotent per pair.
+        self._d.forward(f"tcp:{self._port}", f"tcp:{self._port}")
+        self._ready = True
+
+    # ── dump ─────────────────────────────────────────────────────────────────
+
+    def _http_get(self, path: str) -> str:
+        url = f"http://127.0.0.1:{self._port}{path}"
+        with urllib.request.urlopen(url, timeout=self._timeout) as resp:  # noqa: S310 — fixed localhost URL
+            return resp.read().decode("utf-8", errors="replace")
+
+    def dump(self, retries: int = 1, retry_delay: float = 0.4) -> str | None:
+        """Fetch the hierarchy XML from the server. None on a dead/empty tree.
+
+        A transient miss (server mid-restart, screen not settled) is retried
+        once. Returns None rather than raising so :class:`~autox.selector.Selector`
+        treats an unreachable tree as a quiet miss; call :meth:`status` for a
+        human-readable reason when bringing the server up."""
+        import time
+
+        for attempt in range(retries + 1):
+            try:
+                if not self._ready:
+                    self.ensure_ready()
+                xml = trim_hierarchy_xml(self._http_get("/dump"))
+                if xml is not None:
+                    return xml
+            except ServerUnavailableError:
+                return None  # not installed/enabled — a quiet miss; status() explains why
+            except (urllib.error.URLError, OSError) as e:
+                logger.debug("RPC dump attempt %d failed: %s", attempt + 1, e)
+                self._ready = False  # re-run bring-up next attempt (forward may have dropped)
+            if attempt < retries:
+                time.sleep(retry_delay)
+        return None
+
+    def ping(self) -> bool:
+        try:
+            self.ensure_ready()
+            return self._http_get("/ping").strip().lower().startswith("ok")
+        except (ServerUnavailableError, urllib.error.URLError, OSError):
+            return False
+
+    def status(self) -> str:
+        """One-line diagnostic for selfcheck / bring-up."""
+        if not self._is_installed():
+            return f"NOT INSTALLED ({SERVER_PACKAGE}) — build+install server/autox-server.apk"
+        if SERVER_SERVICE not in self._enabled_services():
+            return "installed but accessibility service not enabled (autox enables it on first dump)"
+        return "ready" if self.ping() else "installed+enabled but not responding on the RPC port"

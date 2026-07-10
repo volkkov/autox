@@ -33,6 +33,22 @@ def test_zero_area_node_is_filtered(home_xml):
     assert match_nodes(home_xml, {"text": "Hidden"}) == []
 
 
+_OFFSCREEN_DUP = """<?xml version='1.0'?>
+<hierarchy rotation="0">
+  <node text="Go" class="android.widget.Button" bounds="[800,10][900,60]"/>
+  <node text="Go" class="android.widget.Button" bounds="[100,200][300,280]"/>
+</hierarchy>"""
+
+
+def test_offscreen_node_culled_only_when_screen_known():
+    # Without screen: both match (instance 0 is the off-screen one).
+    both = match_nodes(_OFFSCREEN_DUP, {"text": "Go"})
+    assert [n.center for n in both] == [(850, 35), (200, 240)]
+    # With screen: the off-screen namesake is dropped, so instance 0 is visible.
+    visible = match_nodes(_OFFSCREEN_DUP, {"text": "Go"}, screen=(720, 1600))
+    assert [n.center for n in visible] == [(200, 240)]
+
+
 def test_unsupported_kwarg_raises(home_xml):
     with pytest.raises(ValueError):
         match_nodes(home_xml, {"bogusAttr": "x"})

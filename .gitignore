@@ -8,3 +8,11 @@ dist/
 build/
 
 .claude/
+
+# android server build
+server/.gradle/
+server/build/
+server/app/build/
+server/local.properties
+server/**/gradle-wrapper.jar
+
