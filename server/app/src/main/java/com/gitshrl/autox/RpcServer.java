@@ -101,7 +101,9 @@ final class RpcServer implements Runnable {
                 body = xml == null ? "" : xml;
                 contentType = "application/xml; charset=utf-8";
             } else if (path.startsWith("/ping")) {
-                body = "ok";
+                // Distinctive identity so the client can tell autox's server
+                // apart from a foreign server squatting on the port.
+                body = "autox-rpc 0.1.0";
             } else {
                 body = "autox rpc";
             }

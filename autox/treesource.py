@@ -21,6 +21,7 @@ The XML the server emits matches uiautomator's schema exactly (``<hierarchy>`` o
 """
 
 import logging
+import time
 import urllib.error
 import urllib.request
 from typing import Protocol, runtime_checkable
@@ -31,10 +32,16 @@ logger = logging.getLogger(__name__)
 
 # Device-side RPC server coordinates. The AccessibilityService in server/ binds
 # this port on the device loopback; `adb forward` bridges the same port on the
-# host. Package/service must match server/AndroidManifest.xml.
-DEFAULT_RPC_PORT = 9008
+# host. Package/service must match server/AndroidManifest.xml and the port must
+# match AutoxAccessibilityService.RPC_PORT.
+#
+# NOT 9008: that is uiautomator2's jsonrpc port, and a leftover u2 server there
+# would both block our bind and answer our probes. /ping returns SERVER_IDENT so
+# a foreign server on the port is detected instead of mistaken for autox.
+DEFAULT_RPC_PORT = 9998
 SERVER_PACKAGE = "com.gitshrl.autox"
 SERVER_SERVICE = f"{SERVER_PACKAGE}/{SERVER_PACKAGE}.AutoxAccessibilityService"
+SERVER_IDENT = "autox-rpc"  # /ping response prefix — proves we reached autox's server
 
 
 @runtime_checkable
@@ -71,10 +78,19 @@ class RpcTreeSource:
     missing.
     """
 
-    def __init__(self, adb_device, port: int = DEFAULT_RPC_PORT, connect_timeout: float = 5.0):
+    def __init__(
+        self,
+        adb_device,
+        port: int = DEFAULT_RPC_PORT,
+        connect_timeout: float = 5.0,
+        ready_timeout: float = 6.0,
+    ):
         self._d = adb_device
         self._port = port
         self._timeout = connect_timeout
+        # How long to wait for the service's socket after a fresh enable — the
+        # AccessibilityService cold-starts and binds its port on connect.
+        self._ready_timeout = ready_timeout
         self._ready = False
 
     # ── bring-up ─────────────────────────────────────────────────────────────
@@ -93,20 +109,39 @@ class RpcTreeSource:
 
     def ensure_ready(self) -> None:
         """Enable the accessibility service and forward the port (idempotent).
-        Raises :class:`ServerUnavailableError` if the APK isn't installed."""
+        On a fresh enable, wait for the service to cold-start its socket. Raises
+        :class:`ServerUnavailableError` if the APK isn't installed."""
         if not self._is_installed():
             raise ServerUnavailableError(
                 f"{SERVER_PACKAGE} is not installed — build server/ (needs an Android SDK; "
                 "the repo's CI builds autox-server.apk) and `adb install -r autox-server.apk`"
             )
         enabled = self._enabled_services()
-        if SERVER_SERVICE not in enabled:
+        fresh = SERVER_SERVICE not in enabled
+        if fresh:
             merged = SERVER_SERVICE if not enabled.strip() or enabled.strip() == "null" else f"{enabled}:{SERVER_SERVICE}"
             self._d.shell(f"settings put secure enabled_accessibility_services {merged}")
             self._d.shell("settings put secure accessibility_enabled 1")
         # Bridge host:port -> device:port. adbutils forward is idempotent per pair.
         self._d.forward(f"tcp:{self._port}", f"tcp:{self._port}")
+        if fresh:
+            self._await_server()
         self._ready = True
+
+    def _await_server(self) -> None:
+        """Poll /ping until the freshly-enabled service answers as autox."""
+        deadline = time.time() + self._ready_timeout
+        while time.time() < deadline:
+            try:
+                if self._is_autox(self._http_get("/ping")):
+                    return
+            except (urllib.error.URLError, OSError):
+                pass
+            time.sleep(0.3)
+
+    @staticmethod
+    def _is_autox(body: str) -> bool:
+        return body.strip().lower().startswith(SERVER_IDENT)
 
     # ── dump ─────────────────────────────────────────────────────────────────
 
@@ -122,8 +157,6 @@ class RpcTreeSource:
         once. Returns None rather than raising so :class:`~autox.selector.Selector`
         treats an unreachable tree as a quiet miss; call :meth:`status` for a
         human-readable reason when bringing the server up."""
-        import time
-
         for attempt in range(retries + 1):
             try:
                 if not self._ready:
@@ -141,9 +174,11 @@ class RpcTreeSource:
         return None
 
     def ping(self) -> bool:
+        """True only if autox's own server answers — a foreign server on the
+        port (e.g. u2's "pong") fails the identity check."""
         try:
             self.ensure_ready()
-            return self._http_get("/ping").strip().lower().startswith("ok")
+            return self._is_autox(self._http_get("/ping"))
         except (ServerUnavailableError, urllib.error.URLError, OSError):
             return False
 
@@ -153,4 +188,11 @@ class RpcTreeSource:
             return f"NOT INSTALLED ({SERVER_PACKAGE}) — build+install server/autox-server.apk"
         if SERVER_SERVICE not in self._enabled_services():
             return "installed but accessibility service not enabled (autox enables it on first dump)"
-        return "ready" if self.ping() else "installed+enabled but not responding on the RPC port"
+        try:
+            self.ensure_ready()
+            body = self._http_get("/ping")
+        except (ServerUnavailableError, urllib.error.URLError, OSError) as e:
+            return f"installed+enabled but not responding on port {self._port} ({type(e).__name__})"
+        if self._is_autox(body):
+            return "ready"
+        return f"port {self._port} answered by a non-autox server ({body.strip()[:24]!r})"

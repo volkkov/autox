@@ -16,7 +16,9 @@ import android.view.accessibility.AccessibilityEvent;
 public class AutoxAccessibilityService extends AccessibilityService {
 
     static final String TAG = "autox";
-    static final int RPC_PORT = 9008;
+    // NOT 9008 — that is uiautomator2's jsonrpc port; a leftover u2 server there
+    // would block our bind. Must match autox.treesource.DEFAULT_RPC_PORT.
+    static final int RPC_PORT = 9998;
 
     private RpcServer rpc;
 

@@ -1,6 +1,7 @@
 import pytest
 
 from autox.treesource import (
+    DEFAULT_RPC_PORT,
     SERVER_SERVICE,
     RpcTreeSource,
     ServerUnavailableError,
@@ -54,15 +55,29 @@ def test_dump_returns_none_when_not_installed():
 
 def test_ensure_ready_enables_service_and_forwards():
     fake = FakeAdb(installed=True, enabled="null")
-    RpcTreeSource(fake, port=9008).ensure_ready()
+    RpcTreeSource(fake, ready_timeout=0).ensure_ready()
     assert SERVER_SERVICE in fake.enabled
-    assert ("tcp:9008", "tcp:9008") in fake.forwards
+    assert (f"tcp:{DEFAULT_RPC_PORT}", f"tcp:{DEFAULT_RPC_PORT}") in fake.forwards
     assert any("accessibility_enabled 1" in s for s in fake.shell_log)
+
+
+def test_ping_accepts_autox_identity(monkeypatch):
+    src = RpcTreeSource(FakeAdb(installed=True, enabled=SERVER_SERVICE), ready_timeout=0)
+    monkeypatch.setattr(src, "_http_get", lambda path: "autox-rpc 0.1.0")
+    assert src.ping() is True
+
+
+def test_ping_rejects_foreign_server(monkeypatch):
+    # uiautomator2's server answers /ping with "pong" — must NOT pass as autox
+    # (that was the port-9008 collision bug).
+    src = RpcTreeSource(FakeAdb(installed=True, enabled=SERVER_SERVICE), ready_timeout=0)
+    monkeypatch.setattr(src, "_http_get", lambda path: "pong")
+    assert src.ping() is False
 
 
 def test_ensure_ready_appends_to_existing_services():
     fake = FakeAdb(installed=True, enabled="com.other/.Svc")
-    RpcTreeSource(fake).ensure_ready()
+    RpcTreeSource(fake, ready_timeout=0).ensure_ready()
     assert "com.other/.Svc" in fake.enabled  # existing service preserved
     assert SERVER_SERVICE in fake.enabled
 
