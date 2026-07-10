@@ -3,6 +3,9 @@
 
     <!-- Needed to open the loopback RPC socket the client reaches via adb forward. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- So make_toast's toasts aren't suppressed (Android 13+ gates toasts on the
+         app's notifications being enabled). Granted over adb by the client. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"

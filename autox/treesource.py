@@ -122,6 +122,12 @@ class RpcTreeSource:
             merged = SERVER_SERVICE if not enabled.strip() or enabled.strip() == "null" else f"{enabled}:{SERVER_SERVICE}"
             self._d.shell(f"settings put secure enabled_accessibility_services {merged}")
             self._d.shell("settings put secure accessibility_enabled 1")
+            # So make_toast isn't suppressed (Android 13+ gates toasts on the
+            # app's notifications being enabled). Best-effort.
+            try:
+                self._d.shell(["pm", "grant", SERVER_PACKAGE, "android.permission.POST_NOTIFICATIONS"])
+            except Exception:  # noqa: BLE001
+                pass
         # Bridge host:port -> device:port. adbutils forward is idempotent per pair.
         self._d.forward(f"tcp:{self._port}", f"tcp:{self._port}")
         if fresh:
