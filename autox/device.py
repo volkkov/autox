@@ -594,6 +594,16 @@ class Device:
     # ── text input / IME ─────────────────────────────────────────────────────
 
     @property
+    def image(self):
+        """Template matching over screenshots (u2's ``d.image``; needs
+        ``autox[image]``)."""
+        if getattr(self, "_image", None) is None:
+            from autox.image import ImageX
+
+            self._image = ImageX(self)
+        return self._image
+
+    @property
     def keyboard(self):
         """autox's bundled IME driver (lazy)."""
         if getattr(self, "_keyboard", None) is None:

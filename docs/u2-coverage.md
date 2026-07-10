@@ -103,6 +103,7 @@ u2). Kwargs: `text/textContains/textMatches/textStartsWith`,
 | `push` / `pull` | same | ✅ adbutils sync |
 | `open_notification` `open_quick_settings` `open_url` | same | ✅ |
 | `toast.get_message` / `make_toast` | same | ✅ a11y server captures toast events; `make_toast` shows one |
+| `image` (template match) | `d.image` | ✅ optional `autox[image]` (opencv over `screenshot()`) |
 | `settings[...]` `implicitly_wait` `wait_timeout` | same | ✅ dict + wait timeouts |
 | `sleep` | `d.sleep` | ✅ |
 | `start_uiautomator` / `stop_uiautomator` / `reset_uiautomator` | same | ✅ maps to RPC-server bring-up |
@@ -111,7 +112,6 @@ u2). Kwargs: `text/textContains/textMatches/textStartsWith`,
 
 | u2 | why | plan |
 | --- | --- | --- |
-| `image` (template match) | needs OpenCV | optional `autox[image]` extra + `cv2.matchTemplate` over `screenshot()` |
 | `last_traversed_text` / `clear_traversed_text` | needs the a11y **event** stream (rarely used) | buffer traversal events in the server like toasts |
 | `jsonrpc` / `jsonrpc_call` | ➖ | n/a — autox has no jsonrpc server; the a11y RPC replaces it |
 | `debug` / `show_touch_trace` / `show_float_window` | dev toggles | `settings put system show_touches 1` if needed; low value |

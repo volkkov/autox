@@ -17,6 +17,8 @@ dependencies = [
 # Full XPath 1.0 (contains(), functions, and/or). Without it, xpath falls back
 # to ElementTree's attribute-predicate subset.
 xpath = ["lxml>=4.9"]
+# Template matching over screenshots (d.image).
+image = ["opencv-python-headless>=4.5", "numpy>=1.21"]
 dev = [
   "pytest>=8.1.1,<9",
   "ruff",
