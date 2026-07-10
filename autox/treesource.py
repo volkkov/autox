@@ -173,6 +173,26 @@ class RpcTreeSource:
                 time.sleep(retry_delay)
         return None
 
+    def get_toast(self) -> tuple[int, str] | None:
+        """(age_ms, text) of the last toast the a11y server captured, or None.
+        age_ms is -1 when no toast has been seen."""
+        self.ensure_ready()
+        resp = self._http_get("/toast")
+        if "\t" not in resp:
+            return None
+        age, text = resp.split("\t", 1)
+        try:
+            return (int(age), text)
+        except ValueError:
+            return None
+
+    def show_toast(self, text: str) -> None:
+        import base64
+
+        self.ensure_ready()
+        b64 = base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii")
+        self._http_get(f"/toastshow?b64={b64}")
+
     def clipboard_get(self) -> str:
         """Read the device clipboard via the server (the app owns clipboard
         access as the active IME)."""

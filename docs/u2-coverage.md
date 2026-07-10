@@ -102,6 +102,7 @@ u2). Kwargs: `text/textContains/textMatches/textStartsWith`,
 | `clipboard` / `set_clipboard` | same | ✅ via autox's own server (the IME app owns `ClipboardManager` access); clipper is dead on Android 16 (its APK targets SDK 0, install rejected) |
 | `push` / `pull` | same | ✅ adbutils sync |
 | `open_notification` `open_quick_settings` `open_url` | same | ✅ |
+| `toast.get_message` / `make_toast` | same | ✅ a11y server captures toast events; `make_toast` shows one |
 | `settings[...]` `implicitly_wait` `wait_timeout` | same | ✅ dict + wait timeouts |
 | `sleep` | `d.sleep` | ✅ |
 | `start_uiautomator` / `stop_uiautomator` / `reset_uiautomator` | same | ✅ maps to RPC-server bring-up |
@@ -111,7 +112,7 @@ u2). Kwargs: `text/textContains/textMatches/textStartsWith`,
 | u2 | why | plan |
 | --- | --- | --- |
 | `image` (template match) | needs OpenCV | optional `autox[image]` extra + `cv2.matchTemplate` over `screenshot()` |
-| `toast` / `last_traversed_text` / `make_toast` | needs the a11y **event** stream | add an event buffer + `/toast` endpoint to the RPC server |
+| `last_traversed_text` / `clear_traversed_text` | needs the a11y **event** stream (rarely used) | buffer traversal events in the server like toasts |
 | `pinch_in/out`, `gesture` | multi-finger injection | add `/gesture` RPC → `AccessibilityService.dispatchGesture` |
 | `jsonrpc` / `jsonrpc_call` | ➖ | n/a — autox has no jsonrpc server; the a11y RPC replaces it |
 | `debug` / `show_touch_trace` / `show_float_window` | dev toggles | `settings put system show_touches 1` if needed; low value |

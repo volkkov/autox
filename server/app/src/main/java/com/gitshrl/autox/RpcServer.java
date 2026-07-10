@@ -112,6 +112,14 @@ final class RpcServer implements Runnable {
                 // Distinctive identity so the client can tell autox's server
                 // apart from a foreign server squatting on the port.
                 body = "autox-rpc 0.1.0";
+            } else if (path.startsWith("/toastshow")) {
+                String b64 = queryParam(path, "b64");
+                if (b64 != null) {
+                    service.showToast(new String(Base64.decode(b64, Base64.URL_SAFE), StandardCharsets.UTF_8));
+                }
+                body = "ok";
+            } else if (path.startsWith("/toast")) {
+                body = service.lastToastAgeMs() + "\t" + service.lastToast();
             } else if (path.startsWith("/clipboard")) {
                 // Readable because the app owns clipboard access as the active
                 // IME (Android 10+ restricts it to the foreground app / IME).

@@ -2,8 +2,14 @@ package com.gitshrl.autox;
 
 import android.accessibilityservice.AccessibilityService;
 import android.content.Intent;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
+import android.widget.Toast;
+
+import java.util.List;
 
 /**
  * The device-side half of autox: an AccessibilityService that reads the live UI
@@ -21,6 +27,8 @@ public class AutoxAccessibilityService extends AccessibilityService {
     static final int RPC_PORT = 9998;
 
     private RpcServer rpc;
+    private volatile String lastToast = "";
+    private volatile long lastToastAt = 0;
 
     @Override
     protected void onServiceConnected() {
@@ -32,9 +40,38 @@ public class AutoxAccessibilityService extends AccessibilityService {
         }
     }
 
-    /** No-op: autox polls the tree on demand, it does not react to events. */
+    /** Capture toast text; the client reads the last one via /toast. Toasts
+     * arrive as NOTIFICATION_STATE_CHANGED events with no Notification payload. */
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event.getEventType() == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED
+                && event.getParcelableData() == null) {
+            List<CharSequence> texts = event.getText();
+            if (texts != null && !texts.isEmpty()) {
+                StringBuilder sb = new StringBuilder();
+                for (CharSequence t : texts) {
+                    if (t != null) {
+                        sb.append(t);
+                    }
+                }
+                if (sb.length() > 0) {
+                    lastToast = sb.toString();
+                    lastToastAt = SystemClock.uptimeMillis();
+                }
+            }
+        }
+    }
+
+    String lastToast() {
+        return lastToast;
+    }
+
+    long lastToastAgeMs() {
+        return lastToastAt == 0 ? -1 : SystemClock.uptimeMillis() - lastToastAt;
+    }
+
+    void showToast(final String text) {
+        new Handler(Looper.getMainLooper()).post(() -> Toast.makeText(this, text, Toast.LENGTH_SHORT).show());
     }
 
     @Override

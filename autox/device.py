@@ -97,14 +97,34 @@ _SWIPE_OFFSETS = {
 
 
 class Toast:
-    """Toast reader stub — parity with ``u2.toast``.
+    """Reads captured toasts — parity with ``u2.toast``.
 
-    Reading toasts needs the accessibility event stream. The RPC server exposes
-    only the tree (``/dump``), not events, so ``get_message`` returns the
-    default; macrox already treats a missing toast as "No toast message"."""
+    The a11y server buffers the last toast text it saw (toasts arrive as
+    accessibility events); ``get_message`` polls it. Returns ``default`` when the
+    tree source can't report toasts (e.g. a StaticTreeSource)."""
+
+    def __init__(self, device):
+        self._device = device
 
     def get_message(self, wait_timeout: float = 10.0, cache_timeout: float = 10.0, default=None):
-        return default
+        """Wait up to ``wait_timeout`` for a toast captured within the last
+        ``cache_timeout`` seconds; return its text or ``default``."""
+        src = self._device.tree_source
+        if not hasattr(src, "get_toast"):
+            return default
+        deadline = time.monotonic() + wait_timeout
+        while True:
+            latest = src.get_toast()
+            if latest is not None:
+                age_ms, text = latest
+                if text and 0 <= age_ms <= cache_timeout * 1000:
+                    return text
+            if time.monotonic() >= deadline:
+                return default
+            time.sleep(0.3)
+
+    def reset(self) -> None:
+        """u2 parity; the buffer is server-side and self-expiring via age."""
 
 
 class Device:
@@ -126,7 +146,7 @@ class Device:
         # The UI tree comes through this seam. Default: the device-side
         # AccessibilityService RPC server. Inject a StaticTreeSource for tests.
         self.tree_source: TreeSource = tree_source or RpcTreeSource(self._d)
-        self.toast = Toast()
+        self.toast = Toast(self)
         # Immutable device props, read once on first info access (keeps connect
         # side-effect-free while sparing the getprop round-trips on every later
         # info read — macrox reads .info ~twice per agent step).
@@ -391,6 +411,14 @@ class Device:
         """Wake and dismiss an insecure keyguard."""
         self._d.shell(["input", "keyevent", "KEYCODE_WAKEUP"])
         self._d.shell(["wm", "dismiss-keyguard"])
+
+    def make_toast(self, text: str, duration: float = 1.0) -> None:
+        """Show a toast on the device via autox's server (u2 parity; also the
+        way to exercise toast capture)."""
+        src = self.tree_source
+        if not hasattr(src, "show_toast"):
+            raise DeviceError("make_toast needs the RPC tree source (install autox-server.apk)")
+        src.show_toast(text)
 
     def keyevent(self, key) -> None:
         """Alias for :meth:`press` — u2 name."""
