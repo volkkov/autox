@@ -73,16 +73,29 @@ canonical build.
 
 ## Consuming autox from macrox
 
-macrox switches its import and drives autox unchanged (the surface matches the u2
-slice it uses):
+**Verified end-to-end:** macrox's `Environment` runs on autox unchanged —
+`has_selectors` stays True on Android 16, `get_state` returns a full element list,
+and `click_by_text` resolves through autox's client-side selectors. autox provides
+the entire u2 slice macrox uses (dump_hierarchy, selectors, info, controls,
+screenshot).
+
+**Zero-edit drop-in (recommended)** — alias autox as `uiautomator2` before macrox
+imports it, so macrox needs no source change:
+
+```python
+import autox
+autox.install_as_uiautomator2()   # `import uiautomator2 as u2` now resolves to autox
+# ... then import/run macrox as usual
+```
+
+Or edit the imports in `environment.py` (rename `u2`→`ax` at the two use sites):
 
 ```python
 import autox as ax
 from autox.exceptions import BaseException as U2BaseError
 from autox.exceptions import UiAutomationNotConnectedError
-# ... dev = ax.connect(serial)
 ```
 
 Add autox as a dependency (`uv add ../autox` or a git dep) and `uv sync`. Until
-the RPC server is installed, macrox degrades to its existing coordinate/vision
-mode; once it's up, selector clicks work again on Android 16.
+the RPC server is installed, macrox degrades to its coordinate/vision mode; once
+it's up, selector clicks work again on Android 16.

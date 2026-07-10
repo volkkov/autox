@@ -32,6 +32,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "connect",
+    "install_as_uiautomator2",
     "Device",
     "Selector",
     "UiObject",
@@ -52,3 +53,21 @@ def connect(serial: str | None = None, host: str = "127.0.0.1", port: int = 5037
     Fast and side-effect-free: no APK push, no server start at connect time —
     the tree source brings the RPC server up lazily on first dump."""
     return Device(serial=serial, host=host, port=port)
+
+
+def install_as_uiautomator2() -> None:
+    """Alias autox as the ``uiautomator2`` module so existing u2 code runs on
+    autox unchanged — a zero-edit drop-in. Call it before importing code that
+    does ``import uiautomator2``:
+
+        import autox
+        autox.install_as_uiautomator2()
+        # code that `import uiautomator2 as u2` now gets autox
+
+    Verified: macrox's Environment drives autox this way with selectors live on
+    Android 16.
+    """
+    import sys
+
+    sys.modules["uiautomator2"] = sys.modules[__name__]
+    sys.modules["uiautomator2.exceptions"] = exceptions
