@@ -293,25 +293,34 @@ class UiObject:
         """Fling the element in ``direction`` (fast)."""
         self.swipe(direction, scale=0.9, duration=0.05)
 
+    def _fill(self, node: MatchedNode, text: str | None, clear: bool) -> None:
+        """Type into the field via autox's IME (UTF-8), re-focusing after the IME
+        switch so the input connection binds. Falls back to adb input text
+        (ASCII) if the IME can't be brought up."""
+        kb = self._device.keyboard
+        if kb.prepare():  # switch IME *before* focusing (won't switch while shown)
+            self._device.click(*node.center)  # focus binds the input connection
+            self._device.sleep(0.4)
+            if clear:
+                kb.clear()
+            if text is not None:
+                kb.commit(text)
+        else:
+            self._device.click(*node.center)
+            if clear:
+                self._device.clear_text(count=max(len(node.attrib.get("text", "")) + 2, 4))
+            if text is not None:
+                self._device.adb_device.send_keys(text)
+
     def set_text(self, text: str) -> None:
-        """Focus the field, clear it, then type ``text`` (ASCII; Unicode needs an
-        IME — see the coverage matrix)."""
-        node = self._require()
-        self._device.click(*node.center)
-        self._device.clear_text(count=max(len(node.attrib.get("text", "")) + 2, 4))
-        self._device._type_text(text)
+        """Focus the field, clear it, then type ``text`` (UTF-8 via autox's IME)."""
+        self._fill(self._require(), text, clear=True)
 
     def clear_text(self) -> None:
-        node = self._require()
-        self._device.click(*node.center)
-        self._device.clear_text(count=max(len(node.attrib.get("text", "")) + 2, 4))
+        self._fill(self._require(), None, clear=True)
 
     def send_keys(self, text: str, clear: bool = False) -> None:
-        node = self._require()
-        self._device.click(*node.center)
-        if clear:
-            self._device.clear_text(count=max(len(node.attrib.get("text", "")) + 2, 4))
-        self._device._type_text(text)
+        self._fill(self._require(), text, clear=clear)
 
     def screenshot(self):
         """PIL screenshot cropped to the element's bounds."""

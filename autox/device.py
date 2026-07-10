@@ -150,6 +150,13 @@ class Device:
     def shell(self, cmd, timeout: float | None = None) -> str:
         return self._d.shell(cmd, timeout=timeout)
 
+    def _is_installed(self, package: str) -> bool:
+        """Whether ``package`` has an installed APK path."""
+        try:
+            return bool(self._d.shell(["pm", "path", package]).strip())
+        except Exception:  # noqa: BLE001
+            return False
+
     # ── hierarchy ────────────────────────────────────────────────────────────
 
     def dump_hierarchy(self, compressed: bool = True, pretty: bool = False, max_depth: int = 50) -> str:
@@ -565,9 +572,13 @@ class Device:
         return self._keyboard
 
     def _type_text(self, text: str) -> None:
-        # All typing goes through ADBKeyboard (UTF-8/emoji/spaces); fall back to
-        # adb `input text` (ASCII) only if ADBKeyboard can't be brought up.
-        if not self.keyboard.type(text):
+        # If autox's IME is already active, commit UTF-8 through it; otherwise adb
+        # `input text` (ASCII) injects into the focused field without an IME
+        # switch. Robust UTF-8 typing is the selector path (UiObject.set_text),
+        # which re-focuses after switching the IME.
+        if self.keyboard.is_active():
+            self.keyboard.commit(text)
+        else:
             self._d.send_keys(text)
 
     def send_keys(self, text: str, clear: bool = False) -> None:
@@ -577,18 +588,20 @@ class Device:
         self._type_text(text)
 
     def clear_text(self, count: int = 120) -> None:
-        """Clear the focused field via ADBKeyboard's ADB_CLEAR_TEXT; fall back to
-        cursor-to-end then a burst of deletes."""
-        if self.keyboard.clear():
+        """Clear the focused field: via autox's IME if active, else cursor-to-end
+        then a burst of deletes."""
+        if self.keyboard.is_active():
+            self.keyboard.clear()
             return
         self._d.shell(["input", "keyevent", "KEYCODE_MOVE_END"])
         self._d.shell("input keyevent " + ("67 " * count).strip())  # 67 = KEYCODE_DEL
 
     def send_action(self, action: str = "search") -> None:
-        """Trigger an IME action (search/go/next/done/send) — via ADBKeyboard's
-        editor action, falling back to a keyevent."""
+        """Trigger an IME action (search/go/next/done/send) — via autox's IME
+        editor action when active, else a keyevent."""
         code = _IME_EDITOR_CODES.get(action.lower())
-        if code is not None and self.keyboard.editor_action(code):
+        if code is not None and self.keyboard.is_active():
+            self.keyboard.editor_action(code)
             return
         self._d.shell(["input", "keyevent", _IME_ACTIONS.get(action.lower(), "KEYCODE_ENTER")])
 

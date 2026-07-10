@@ -99,7 +99,7 @@ u2). Kwargs: `text/textContains/textMatches/textStartsWith`,
 | u2 | autox | |
 | --- | --- | --- |
 | `watcher` `watch_context` `wait_stable` | `d.watcher` / `d.watch_context()` | ✅ client-side poller (`when().click/press/call`, `run/start/stop`) |
-| `clipboard` / `set_clipboard` | same | ✅ via [clipper](https://github.com/majido/clipper) (`app_install` its APK) |
+| `clipboard` / `set_clipboard` | same | ✅ via autox's own server (the IME app owns `ClipboardManager` access); clipper is dead on Android 16 (its APK targets SDK 0, install rejected) |
 | `push` / `pull` | same | ✅ adbutils sync |
 | `open_notification` `open_quick_settings` `open_url` | same | ✅ |
 | `settings[...]` `implicitly_wait` `wait_timeout` | same | ✅ dict + wait timeouts |

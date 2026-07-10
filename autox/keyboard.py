@@ -1,15 +1,18 @@
 """Text input via autox's own bundled IME (``AutoxIME`` in ``server/``).
 
 adb ``input text`` is ASCII-only and mangles spaces; an IME takes UTF-8, so
-Unicode, emoji, and spaces all pass through. autox reimplements ADBKeyboard's
-broadcast protocol inside its own server APK — the same APK that hosts the a11y
-tree server — so typing needs no external app. All typing routes here, falling
-back to adbutils ``send_keys`` only when the IME can't be brought up.
+Unicode and spaces pass through. autox reimplements ADBKeyboard's broadcast
+protocol inside its own server APK — the same APK that hosts the a11y tree server
+— so typing needs no external app.
 
-The IME's broadcast receiver commits to the focused field only while the IME is
-the active method AND bound to that field, so :meth:`ensure_active` selects the
-IME and polls ``dumpsys input_method`` until it is current and shown — broadcasting
-before that races the cold start and the text is silently dropped.
+Two Android facts drive the flow (both learned the hard way on Android 16):
+
+* The system **will not switch IMEs while a keyboard is actively shown** —
+  ``ime set`` silently no-ops. :meth:`prepare` hides the current keyboard first.
+* autox's IME draws no visible view, so ``mInputShown`` never becomes true. It is
+  NOT a readiness signal — ``commitText`` works whenever a field is focused. So
+  :meth:`prepare` is called *before* focusing; the caller then focuses the field
+  (which binds the input connection) and calls :meth:`commit`.
 """
 
 import base64
@@ -20,9 +23,10 @@ from autox.treesource import SERVER_PACKAGE
 
 logger = logging.getLogger(__name__)
 
-# The IME ships in the autox server APK (see server/AutoxIME.java) — nothing to
-# install separately.
-IME = f"{SERVER_PACKAGE}/{SERVER_PACKAGE}.AutoxIME"
+# The IME ships in the autox server APK (see server/AutoxIME.java). The id uses
+# the relative class form the manifest declares (android:name=".AutoxIME") — the
+# `ime` command rejects the fully-qualified form as "Unknown input method".
+IME = f"{SERVER_PACKAGE}/.AutoxIME"
 
 
 class AutoxKeyboard:
@@ -38,57 +42,56 @@ class AutoxKeyboard:
         except Exception:  # noqa: BLE001
             return False
 
-    def _state(self) -> tuple[str | None, bool]:
+    def current(self) -> str:
         try:
-            ime = (self._d.shell("settings get secure default_input_method") or "").strip()
-            dump = self._d.shell("dumpsys input_method") or ""
+            return (self._d.shell("settings get secure default_input_method") or "").strip()
         except Exception:  # noqa: BLE001
-            return (None, False)
-        return (ime or None, "mInputShown=true" in dump)
+            return ""
 
-    def ensure_active(self, timeout: float = 5.0) -> bool:
-        """Make autox's IME the current method and wait until it is shown.
-        Returns False if the autox APK isn't installed or it never becomes ready."""
+    def is_active(self) -> bool:
+        return self.current() == IME
+
+    def _shown(self) -> bool:
+        try:
+            return "mInputShown=true" in (self._d.shell("dumpsys input_method") or "")
+        except Exception:  # noqa: BLE001
+            return False
+
+    def prepare(self, timeout: float = 3.0) -> bool:
+        """Make autox's IME the active method. Call BEFORE focusing the target
+        field — the system won't switch IMEs while another keyboard is shown, so
+        a shown keyboard is dismissed first. Returns whether autox's IME is now
+        active."""
         if not self.is_available():
             return False
-        method, shown = self._state()
-        if method != IME:
-            # Only switch when needed — re-setting the active IME tears down a
-            # working input connection.
-            self._d.shell(["ime", "enable", IME])
-            self._d.shell(["ime", "set", IME])
+        if self.is_active():
+            return True
+        if self._shown():
+            # BACK routes to the IME and just hides the keyboard (a field stays
+            # focused), clearing the way for the switch.
+            self._d.shell(["input", "keyevent", "KEYCODE_BACK"])
+            time.sleep(0.4)
+        self._d.shell(["ime", "enable", IME])
+        self._d.shell(["ime", "set", IME])
         deadline = time.time() + timeout
         while time.time() < deadline:
-            method, shown = self._state()
-            if method == IME and shown:
+            if self.is_active():
                 return True
-            time.sleep(0.3)
+            time.sleep(0.2)
         return False
 
-    def type(self, text: str) -> bool:
-        """Type ``text`` (UTF-8, base64 over the broadcast). Returns success."""
-        if not self.ensure_active():
-            return False
+    def commit(self, text: str) -> None:
+        """Insert ``text`` (UTF-8, base64) into the focused field."""
         b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
         self._d.shell(["am", "broadcast", "-a", "ADB_INPUT_B64", "--es", "msg", b64])
-        return True
 
-    def clear(self) -> bool:
-        """Clear the focused field via ADB_CLEAR_TEXT. Returns success."""
-        if not self.ensure_active():
-            return False
+    def clear(self) -> None:
+        """Clear the focused field via ADB_CLEAR_TEXT."""
         self._d.shell(["am", "broadcast", "-a", "ADB_CLEAR_TEXT"])
-        return True
 
-    def input_keycode(self, code: int) -> bool:
-        if not self.ensure_active():
-            return False
+    def input_keycode(self, code: int) -> None:
         self._d.shell(["am", "broadcast", "-a", "ADB_INPUT_CODE", "--ei", "code", str(code)])
-        return True
 
-    def editor_action(self, code: int) -> bool:
+    def editor_action(self, code: int) -> None:
         """Perform an IME editor action (search/go/…) via ADB_EDITOR_CODE."""
-        if not self.ensure_active():
-            return False
         self._d.shell(["am", "broadcast", "-a", "ADB_EDITOR_CODE", "--ei", "code", str(code)])
-        return True
