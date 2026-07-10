@@ -64,6 +64,24 @@ _IME_ACTIONS = {
 _IME_EDITOR_CODES = {"go": 2, "search": 3, "send": 4, "next": 5, "done": 6, "previous": 7}
 
 
+class _Recording:
+    """Context manager returned by ``Device.screenrecord`` (u2 parity)."""
+
+    def __init__(self, device, filename):
+        self._device = device
+        self._filename = filename
+
+    def __enter__(self) -> "_Recording":
+        self._device.start_recording(self._filename)
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._device.stop_recording()
+
+    def stop(self) -> None:
+        self._device.stop_recording()
+
+
 class Touch:
     """Low-level touch injection — parity with ``u2.touch``. Uses
     ``input motionevent`` (API 24+) to build custom gestures:
@@ -212,6 +230,10 @@ class Device:
         """``d(text="OK", instance=0)`` → a client-side :class:`Selector`."""
         return Selector(self, kwargs)
 
+    def exists(self, **kwargs) -> bool:
+        """Whether a selector matches on the current screen — u2's ``d.exists``."""
+        return self(**kwargs).exists
+
     # ── geometry / info ──────────────────────────────────────────────────────
 
     def window_size(self) -> tuple[int, int]:
@@ -355,6 +377,10 @@ class Device:
     def is_recording(self) -> bool:
         return bool(self._d.is_recording())
 
+    def screenrecord(self, filename: str) -> "_Recording":
+        """u2-named context manager: ``with d.screenrecord('out.mp4'): …``."""
+        return _Recording(self, filename)
+
     # ── app / orientation / server-parity ────────────────────────────────────
 
     def app_start(self, package: str, use_monkey: bool = True, **kwargs) -> None:
@@ -419,6 +445,15 @@ class Device:
         if not hasattr(src, "show_toast"):
             raise DeviceError("make_toast needs the RPC tree source (install autox-server.apk)")
         src.show_toast(text)
+
+    @property
+    def last_toast(self) -> str | None:
+        """The last captured toast text (within the cache window), or None."""
+        return self.toast.get_message(wait_timeout=0)
+
+    def clear_toast(self) -> None:
+        """u2 parity; the toast buffer is server-side and self-expires by age."""
+        self.toast.reset()
 
     def keyevent(self, key) -> None:
         """Alias for :meth:`press` — u2 name."""
