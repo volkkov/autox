@@ -102,6 +102,24 @@ def run(serial: str | None = None) -> _Check:
             return f"{len(els)} elements ({actionable} actionable)"
 
         c.run("dump_elements", check_elements)
+
+        def check_xpath():
+            matches = autox.XPathSelector(dev, "//node[@text]").all()
+            assert isinstance(matches, list), "xpath did not return a list"
+            return f"{len(matches)} nodes with text"
+
+        c.run("xpath", check_xpath)
+
+        def check_relative():
+            labelled = [e for e in dev.dump_elements() if e.get("text")]
+            if not labelled:
+                return "no labelled element (skipped)"
+            text = labelled[0]["text"]
+            parent = dev(text=text).parent()
+            cls = parent.info.get("className") if parent.exists else "n/a"
+            return f"{text!r} parent={cls}"
+
+        c.run("relative_selector", check_relative)
     else:
         for name in ("dump_hierarchy", "selector_resolution", "dump_elements"):
             c.skip(name, "RPC server not ready — build+install server/autox-server.apk")
@@ -115,6 +133,13 @@ def run(serial: str | None = None) -> _Check:
         return f"sdk={info['sdkInt']} size={info['displayWidth']}x{info['displayHeight']} rot={info['displayRotation']}"
 
     c.run("info", check_info)
+
+    def check_device_info():
+        di = dev.device_info
+        assert di["sdk"] > 0 and di["model"], "device_info incomplete"
+        return f"{di['brand']} {di['model']} sdk{di['sdk']}"
+
+    c.run("device_info", check_device_info)
     c.run("screenshot", lambda: f"{dev.screenshot().size[0]}x{dev.screenshot().size[1]}")
 
     def check_orientation():
